@@ -1,7 +1,6 @@
 #!/usr/bin/env bash
-# Build the GitHub release assets for this fork.
-# The tag must already exist on origin before xpress_rs is packaged, because
-# that crate file depends on rust-lzxpress from this repository at that tag.
+# Build the GitHub release assets for one sambafied/main commit.
+# The tag names the release. xpress_rs is consumed from that git tag.
 set -euo pipefail
 
 if [[ $# -ne 2 ]]; then
@@ -11,8 +10,8 @@ fi
 
 tag="$1"
 output="$2"
-if [[ ! "$tag" =~ ^sambafied/v[0-9]+\.[0-9]+\.[0-9]+([.-][0-9A-Za-z.-]+)?$ ]]; then
-  echo "tag must look like sambafied/v0.2.0" >&2
+if [[ ! "$tag" =~ ^sambafied/v[0-9]+\.[0-9]+\.[0-9]+-[0-9a-f]+$ ]]; then
+  echo "tag must look like sambafied/v0.2.0-0123456789ab" >&2
   exit 1
 fi
 
