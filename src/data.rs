@@ -262,7 +262,7 @@ pub fn compress(
                 match_len -= 7;
 
                 if nibble_index == 0 {
-                    nibble_index = out_idx;
+                    // The match token was just written. The length nibble is the next byte.
                     if match_len < 15 {
                         out_buf.push(match_len as u8);
                         metadata_size += mem::size_of::<u8>();
@@ -272,6 +272,7 @@ pub fn compress(
 
                         has_extra_len = true;
                     }
+                    nibble_index = out_buf.len() - 1;
                 } else {
                     if match_len < 15 {
                         out_buf[nibble_index] |= (match_len << 4) as u8;
@@ -316,6 +317,8 @@ pub fn compress(
 
             flags = (flags << 1) | 1;
             flag_count += 1;
+            // Advance past the match metadata before reserving the next flag word.
+            out_idx += metadata_size;
             if flag_count == 32 {
                 store32le!(out_buf, flag_out_off, flags);
                 flag_count = 0;
@@ -327,14 +330,63 @@ pub fn compress(
                 out_idx += mem::size_of::<u32>();
             }
 
-            out_idx += metadata_size;
             in_idx += best_len;
         }
     }
 
-    flags <<= 32 - flag_count;
-    flags |= (1 << (32 - flag_count)) - 1;
-    store32le!(out_buf, flag_out_off, flags);
+    if flag_count == 0 {
+        // The last symbol filled a flag word and reserved a placeholder for the next one.
+        out_buf.truncate(out_buf.len() - 4);
+    } else {
+        flags <<= 32 - flag_count;
+        flags |= (1 << (32 - flag_count)) - 1;
+        store32le!(out_buf, flag_out_off, flags);
+    }
 
     Ok(out_buf)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{compress, decompress};
+
+    fn round_trip(raw: &[u8]) {
+        let compressed = compress(raw).unwrap();
+        let restored = decompress(&compressed).unwrap();
+        assert_eq!(restored, raw);
+    }
+
+    #[test]
+    fn specification_examples_round_trip() {
+        round_trip(b"abcdefghijklmnopqrstuvwxyz");
+        round_trip(&b"abc".repeat(100));
+    }
+
+    #[test]
+    fn extended_lengths_round_trip() {
+        round_trip(&[b'a'; 10]);
+        round_trip(&[b'b'; 17]);
+        round_trip(&[b'c'; 25]);
+        round_trip(&[b'd'; 300]);
+    }
+
+    #[test]
+    fn second_extended_match_keeps_its_length_nibble() {
+        round_trip(b"hellohellohelloXXXXXXXXhellohellohello");
+        let mut mixed = b"start-".to_vec();
+        mixed.extend(std::iter::repeat(b'z').take(40));
+        mixed.extend(b"-mid-");
+        mixed.extend(std::iter::repeat(b'q').take(40));
+        round_trip(&mixed);
+    }
+
+    #[test]
+    fn flag_words_stay_aligned_across_thirty_two_symbols() {
+        round_trip(b"");
+        round_trip(&(0u8..32).collect::<Vec<_>>());
+        round_trip(&(0u8..33).collect::<Vec<_>>());
+        let mut ended_by_match = b"abcdefghijklmnopqrstuvwxyz01234".to_vec();
+        ended_by_match.extend(b"hellohellohello");
+        round_trip(&ended_by_match);
+    }
 }
