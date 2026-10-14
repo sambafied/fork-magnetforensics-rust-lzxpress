@@ -1,0 +1,11 @@
+[package]
+name = "xpress_rs"
+version = "0.2.0"
+edition = "2021"
+description = "xpress_rs is a Rust implementation of the Microsoft Xpress compression algorithm defined in MS-XCA. For the moment, only the LZ77 compression and decompression is implemented."
+license = "MIT"
+repository = "https://github.com/sambafied/fork-magnetforensics-rust-lzxpress"
+keywords = ["xpress", "lz77", "ms-xca", "compression"]
+
+[dependencies]
+rust-lzxpress = { path = ".." }
