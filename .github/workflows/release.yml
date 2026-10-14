@@ -2,17 +2,15 @@ name: Release
 
 on:
   push:
-    tags:
-      - "sambafied/v*"
-  workflow_dispatch:
-    inputs:
-      tag:
-        description: "Release tag, for example sambafied/v0.2.0"
-        required: true
-        type: string
+    branches:
+      - sambafied/main
 
 permissions:
   contents: write
+
+concurrency:
+  group: release-sambafied-main
+  cancel-in-progress: false
 
 env:
   CARGO_TERM_COLOR: always
@@ -21,48 +19,62 @@ jobs:
   release:
     runs-on: ubuntu-latest
     steps:
-      - name: Resolve tag
-        id: tag
-        env:
-          INPUT_TAG: ${{ inputs.tag }}
-        run: |
-          set -euo pipefail
-          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
-            tag="$INPUT_TAG"
-          else
-            tag="${GITHUB_REF_NAME}"
-          fi
-          if [[ ! "$tag" =~ ^sambafied/v[0-9]+\.[0-9]+\.[0-9]+([.-][0-9A-Za-z.-]+)?$ ]]; then
-            echo "tag must look like sambafied/v0.2.0" >&2
-            exit 1
-          fi
-          echo "name=${tag}" >> "$GITHUB_OUTPUT"
-
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
-      - uses: dtolnay/rust-toolchain@stable
-
-      - name: Test
-        run: cargo test --workspace --verbose
-
-      - name: Create tag
-        if: github.event_name == 'workflow_dispatch'
+      - name: Resolve tag
+        id: tag
         run: |
           set -euo pipefail
-          tag="${{ steps.tag.outputs.name }}"
-          if git ls-remote --exit-code --tags origin "refs/tags/${tag}" >/dev/null; then
-            echo "tag ${tag} already exists" >&2
+          version="$(sed -n 's/^version = "\(.*\)"/\1/p' xpress_rs/Cargo.toml | head -n 1)"
+          short="$(git rev-parse --short=12 HEAD)"
+          tag="sambafied/v${version}-${short}"
+          if [[ ! "$tag" =~ ^sambafied/v[0-9]+\.[0-9]+\.[0-9]+-[0-9a-f]+$ ]]; then
+            echo "refusing tag ${tag}" >&2
             exit 1
           fi
-          git tag "$tag"
-          git push origin "refs/tags/${tag}"
+          echo "name=${tag}" >> "$GITHUB_OUTPUT"
+
+      - name: Check for an existing release
+        id: existing
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ steps.tag.outputs.name }}
+        run: |
+          set -euo pipefail
+          if gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - uses: dtolnay/rust-toolchain@stable
+        if: steps.existing.outputs.exists != 'true'
+
+      - name: Test
+        if: steps.existing.outputs.exists != 'true'
+        run: cargo test --workspace --verbose
 
       - name: Package crates
+        if: steps.existing.outputs.exists != 'true'
         run: .github/scripts/package-release.sh "${{ steps.tag.outputs.name }}" "$RUNNER_TEMP/release"
 
+      - name: Create tag
+        if: steps.existing.outputs.exists != 'true'
+        env:
+          RELEASE_TAG: ${{ steps.tag.outputs.name }}
+        run: |
+          set -euo pipefail
+          if git ls-remote --exit-code --tags origin "refs/tags/${RELEASE_TAG}" >/dev/null; then
+            echo "tag ${RELEASE_TAG} already exists"
+          else
+            git tag "$RELEASE_TAG" "$GITHUB_SHA"
+            git push origin "refs/tags/${RELEASE_TAG}"
+          fi
+
       - name: Publish GitHub release
+        if: steps.existing.outputs.exists != 'true'
         env:
           GH_TOKEN: ${{ github.token }}
           RELEASE_TAG: ${{ steps.tag.outputs.name }}
@@ -70,7 +82,7 @@ jobs:
           set -euo pipefail
           notes="$RUNNER_TEMP/release-notes.md"
           cat > "$notes" <<EOF
-          GitHub release of this fork at \`${RELEASE_TAG}\`.
+          GitHub release of \`sambafied/main\` at \`${GITHUB_SHA}\`.
 
           Depend on \`xpress_rs\` from this tag:
 
@@ -83,5 +95,6 @@ jobs:
           gh release create "$RELEASE_TAG" "$RUNNER_TEMP/release"/*.crate "$RUNNER_TEMP/release"/SHA256SUMS \
             --repo "$GITHUB_REPOSITORY" \
             --title "$RELEASE_TAG" \
+            --target "$GITHUB_SHA" \
             --verify-tag \
             --notes-file "$notes"
